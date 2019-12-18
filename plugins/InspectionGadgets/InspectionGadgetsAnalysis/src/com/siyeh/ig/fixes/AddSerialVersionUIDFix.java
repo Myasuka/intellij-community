@@ -16,13 +16,29 @@
 package com.siyeh.ig.fixes;
 
 import com.intellij.codeInspection.ProblemDescriptor;
+import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.module.Module;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.roots.OrderEnumerator;
+import com.intellij.openapi.roots.ProjectFileIndex;
+import com.intellij.openapi.roots.ProjectRootManager;
+import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.psi.*;
+import com.intellij.psi.util.ClassUtil;
+import com.intellij.util.lang.UrlClassLoader;
 import com.siyeh.InspectionGadgetsBundle;
 import com.siyeh.ig.InspectionGadgetsFix;
 import org.jetbrains.annotations.NotNull;
 
+import java.io.File;
+import java.io.ObjectStreamClass;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
+
 public class AddSerialVersionUIDFix extends InspectionGadgetsFix {
+  private static final Logger LOG = Logger.getInstance(AddSerialVersionUIDFix.class);
 
   @Override
   @NotNull
@@ -36,7 +52,29 @@ public class AddSerialVersionUIDFix extends InspectionGadgetsFix {
     final PsiClass aClass = (PsiClass)classIdentifier.getParent();
     assert aClass != null;
     final PsiElementFactory elementFactory = JavaPsiFacade.getElementFactory(aClass.getProject());
-    final long serialVersionUID = SerialVersionUIDBuilder.computeDefaultSUID(aClass);
+    Class<?> className = null;
+    final ProjectFileIndex index = ProjectRootManager.getInstance(project).getFileIndex();
+    final Module module = index.getModuleForFile(aClass.getContainingFile().getVirtualFile());
+    final List<URL> urls = new ArrayList<>();
+    List<String> list = OrderEnumerator.orderEntries(module).recursively().runtimeOnly().getPathsList().getPathList();
+    for (String path : list) {
+      try {
+        urls.add(new File(FileUtil.toSystemIndependentName(path)).toURI().toURL());
+      }
+      catch (MalformedURLException exception) {
+        LOG.error(exception);
+      }
+    }
+    try {
+      UrlClassLoader loader =
+        UrlClassLoader.build().urls(urls).get();
+      className = Class.forName(ClassUtil.getJVMClassName(aClass), false, loader);
+    }
+    catch (ClassNotFoundException exception) {
+      LOG.error(exception);
+    }
+
+    final long serialVersionUID = ObjectStreamClass.lookup(className).getSerialVersionUID();
     final PsiField field =
       elementFactory.createFieldFromText("private static final long serialVersionUID = " + serialVersionUID + "L;", aClass);
     aClass.add(field);
